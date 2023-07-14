@@ -1,0 +1,15 @@
+{
+  "name": "inisire/netbus-mqtt",
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "require": {
+    "php": ">=8.1",
+    "inisire/fibers": "dev-master",
+    "inisire/fibers-mqtt": "dev-master"
+  },
+  "autoload": {
+    "psr-4": {
+      "inisire\\mqtt\\NetBus\\": "src/"
+    }
+  }
+}
