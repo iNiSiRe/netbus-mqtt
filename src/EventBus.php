@@ -3,6 +3,7 @@
 namespace inisire\mqtt\NetBus;
 
 use BinSoul\Net\Mqtt as MQTT;
+use inisire\DataObject\Schema\Type\TObject;
 use inisire\fibers\Network\SocketFactory;
 use inisire\mqtt\Connection;
 use inisire\mqtt\Contract\MessageHandler;
@@ -11,6 +12,8 @@ use inisire\NetBus\Event\EventBusInterface;
 use inisire\NetBus\Event\EventInterface;
 use inisire\NetBus\Event\EventSubscriber;
 use inisire\NetBus\Event\RemoteEvent;
+use inisire\NetBus\Event\RemoteEventInterface;
+use inisire\NetBus\Event\SubscriptionInterface;
 use Psr\Log\LoggerInterface;
 
 
@@ -25,7 +28,7 @@ class EventBus implements EventBusInterface, MessageHandler
 
     public function __construct(
         private readonly LoggerInterface $logger,
-        private readonly SocketFactory   $socketFactory
+        private readonly SocketFactory   $socketFactory,
     )
     {
     }
@@ -35,29 +38,30 @@ class EventBus implements EventBusInterface, MessageHandler
         $this->connection = new Connection($this->logger, $this->socketFactory);
 
         $connected = $this->connection->connect($host);
-        $this->connection->registerMessageHandler($this);
+
+        $this->connection->on('message', [$this, 'handleMessage']);
 
         return $connected;
     }
 
-    public function createSource(string $sourceId): EventSource
+    public function createSource(string $source): EventSource
     {
         if (!$this->connection) {
             throw new \RuntimeException('Not connected');
         }
 
-        return new EventSource($sourceId, $this->connection);
+        return new EventSource($source, $this);
     }
 
-    public function dispatch(string $sourceId, EventInterface $event): void
+    public function dispatch(string $source, EventInterface $event): void
     {
         if (!$this->connection->isConnected()) {
             throw new \RuntimeException('Not connected');
         }
 
-        $topic = sprintf('event_bus/%s/%s', $sourceId, $event->getName());
+        $topic = sprintf('event_bus/%s/%s', $source, $event->getName());
         $payload = json_encode([
-            'src' => $sourceId,
+            'src' => $source,
             'x' => 'event',
             'name' => $event->getName(),
             'data' => $event->getData()
@@ -66,22 +70,28 @@ class EventBus implements EventBusInterface, MessageHandler
         $this->connection->publish(new MQTT\DefaultMessage($topic, $payload));
     }
 
-    public function subscribe(string $sourceId, EventSubscriber $subscriber): void
+    public function subscribe(EventSubscriber $subscriber): void
     {
-        foreach ($subscriber->getSubscribedEvents() as $event => $handler) {
-            $topic = sprintf('event_bus/%s/%s', $sourceId, $event);
-            $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
+        foreach ($subscriber->getEventSubscriptions() as $subscription) {
+            foreach ($subscription->getSubscribedSources()->getEntries() as $source) {
+                $source = str_replace('*', '+', $source);
+                foreach ($subscription->getSubscribedEvents()->getEntries() as $event) {
+                    $event = str_replace('*', '+', $event);
+                    $topic = sprintf('event_bus/%s/%s', $source, $event);
+                    $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
+                }
+            }
         }
 
         $this->subscribers[] = $subscriber;
     }
 
-    private function handleEvent(EventInterface $event): void
+    private function handleEvent(RemoteEventInterface $event): void
     {
         foreach ($this->subscribers as $subscriber) {
-            foreach ($subscriber->getSubscribedEvents() as $name => $handler) {
-                if ($event->getName() === $name) {
-                    call_user_func($handler, $event);
+            foreach ($subscriber->getEventSubscriptions() as $subscription) {
+                if ($subscription->getSubscribedSources()->match($event->getSource()) && $subscription->getSubscribedEvents()->match($event->getName())) {
+                    $subscription->handleEvent($event);
                 }
             }
         }

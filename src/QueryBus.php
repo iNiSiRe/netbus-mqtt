@@ -14,6 +14,7 @@ use inisire\NetBus\Query\QueryInterface;
 use inisire\NetBus\Query\Result;
 use inisire\NetBus\Query\ResultInterface;
 use Psr\Log\LoggerInterface;
+use function inisire\fibers\async;
 
 class QueryBus implements QueryBusInterface, MessageHandler
 {
@@ -85,7 +86,7 @@ class QueryBus implements QueryBusInterface, MessageHandler
 
         $this->connection->publish(new MQTT\DefaultMessage($topic, $payload));
 
-        return $promise->await();
+        return $promise->await(new Promise\Timeout(5, new Result(-1, ['error' => 'timeout'])));
     }
 
     private function handleResult(string $queryId, ResultInterface $result): void
