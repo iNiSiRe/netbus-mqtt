@@ -22,7 +22,7 @@ class EventBus implements EventBusInterface, MessageHandler
     private ?Connection $connection = null;
 
     /**
-     * @var array<EventSubscriber>
+     * @var array<SubscriptionInterface>
      */
     private array $subscribers = [];
 
@@ -70,29 +70,32 @@ class EventBus implements EventBusInterface, MessageHandler
         $this->connection->publish(new MQTT\DefaultMessage($topic, $payload));
     }
 
-    public function subscribe(EventSubscriber $subscriber): void
+    public function subscribe(SubscriptionInterface $subscription): void
     {
-        foreach ($subscriber->getEventSubscriptions() as $subscription) {
-            foreach ($subscription->getSubscribedSources()->getEntries() as $source) {
-                $source = str_replace('*', '+', $source);
-                foreach ($subscription->getSubscribedEvents()->getEntries() as $event) {
-                    $event = str_replace('*', '+', $event);
-                    $topic = sprintf('event_bus/%s/%s', $source, $event);
-                    $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
-                }
+        foreach ($subscription->getSubscribedSources()->getEntries() as $source) {
+            $source = str_replace('*', '+', $source);
+            foreach ($subscription->getSubscribedEvents()->getEntries() as $event) {
+                $event = str_replace('*', '+', $event);
+                $topic = sprintf('event_bus/%s/%s', $source, $event);
+                $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
             }
         }
 
-        $this->subscribers[] = $subscriber;
+        $this->subscribers[] = $subscription;
+    }
+
+    public function registerSubscriber(EventSubscriber $subscriber): void
+    {
+        foreach ($subscriber->getEventSubscriptions() as $subscription) {
+            $this->subscribe($subscription);
+        }
     }
 
     private function handleEvent(RemoteEventInterface $event): void
     {
-        foreach ($this->subscribers as $subscriber) {
-            foreach ($subscriber->getEventSubscriptions() as $subscription) {
-                if ($subscription->getSubscribedSources()->match($event->getSource()) && $subscription->getSubscribedEvents()->match($event->getName())) {
-                    $subscription->handleEvent($event);
-                }
+        foreach ($this->subscribers as $subscription) {
+            if ($subscription->getSubscribedSources()->match($event->getSource()) && $subscription->getSubscribedEvents()->match($event->getName())) {
+                $subscription->handleEvent($event);
             }
         }
     }
