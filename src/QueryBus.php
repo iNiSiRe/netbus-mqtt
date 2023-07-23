@@ -6,7 +6,6 @@ use BinSoul\Net\Mqtt as MQTT;
 use inisire\fibers\Network\SocketFactory;
 use inisire\fibers\Promise;
 use inisire\mqtt\Connection;
-use inisire\mqtt\Contract\MessageHandler;
 use inisire\NetBus\Query\Query;
 use inisire\NetBus\Query\QueryBusInterface;
 use inisire\NetBus\Query\QueryHandlerInterface;
@@ -14,9 +13,9 @@ use inisire\NetBus\Query\QueryInterface;
 use inisire\NetBus\Query\Result;
 use inisire\NetBus\Query\ResultInterface;
 use Psr\Log\LoggerInterface;
-use function inisire\fibers\async;
 
-class QueryBus implements QueryBusInterface, MessageHandler
+
+class QueryBus implements QueryBusInterface
 {
     private string $busId;
 
@@ -53,7 +52,7 @@ class QueryBus implements QueryBusInterface, MessageHandler
             return false;
         }
 
-        $this->connection->registerMessageHandler($this);
+        $this->connection->onMessage([$this, 'handleMessage']);
 
         return true;
     }

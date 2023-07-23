@@ -3,11 +3,8 @@
 namespace inisire\mqtt\NetBus;
 
 use BinSoul\Net\Mqtt as MQTT;
-use inisire\DataObject\Schema\Type\TObject;
 use inisire\fibers\Network\SocketFactory;
 use inisire\mqtt\Connection;
-use inisire\mqtt\Contract\MessageHandler;
-use inisire\NetBus\Event\Event;
 use inisire\NetBus\Event\EventBusInterface;
 use inisire\NetBus\Event\EventInterface;
 use inisire\NetBus\Event\EventSubscriber;
@@ -17,7 +14,7 @@ use inisire\NetBus\Event\SubscriptionInterface;
 use Psr\Log\LoggerInterface;
 
 
-class EventBus implements EventBusInterface, MessageHandler
+class EventBus implements EventBusInterface
 {
     private ?Connection $connection = null;
 
@@ -39,7 +36,7 @@ class EventBus implements EventBusInterface, MessageHandler
 
         $connected = $this->connection->connect($host);
 
-        $this->connection->on('message', [$this, 'handleMessage']);
+        $this->connection->onMessage([$this, 'handleMessage']);
 
         return $connected;
     }
