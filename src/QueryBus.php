@@ -16,7 +16,7 @@ use inisire\NetBus\Query\Route;
 use Psr\Log\LoggerInterface;
 
 
-class QueryBus implements QueryBusInterface
+class QueryBus
 {
     private string $busId;
 
@@ -58,21 +58,11 @@ class QueryBus implements QueryBusInterface
         return true;
     }
 
-    public function registerHandler(string $busId, QueryHandlerInterface $handler): void
+    public function on(string $busId, callable $handler): void
     {
         $topic = sprintf('query_bus/%s', $busId);
         $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
-
-        foreach ($handler->getSubscribedQueries() as $name => $handler) {
-            $this->handlers[$name] = $handler;
-        }
-    }
-
-    public function on(Route $route, callable $handler): void
-    {
-        $topic = sprintf('query_bus/%s/%s', $route->getBusId(), $route->getQueryName());
-        $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
-        $this->handlers[$route->getQueryName()] = $handler;
+        $this->handlers[$busId] = $handler;
     }
 
     public function execute(string $destinationId, string $name, array $data = []): ResultInterface
@@ -81,8 +71,9 @@ class QueryBus implements QueryBusInterface
 
         $topic = sprintf('query_bus/%s', $destinationId);
         $payload = json_encode([
-            'src' => $this->busId,
             'x' => 'query',
+            'src' => $this->busId,
+            'dst' => $destinationId,
             'id' => $queryId,
             'name' => $name,
             'data' => $data
@@ -108,15 +99,15 @@ class QueryBus implements QueryBusInterface
         $promise->resolve($result);
     }
 
-    private function handleQuery(QueryInterface $query): ResultInterface
+    private function handleQuery(string $dstId, string $name, array $data): ResultInterface
     {
-        $handler = $this->handlers[$query->getName()] ?? null;
+        $handler = $this->handlers[$dstId] ?? null;
 
         if (!$handler) {
             return new Result(-1, ['error' => 'Bad query']);
         }
 
-        return call_user_func($handler, $query);
+        return call_user_func($handler, new Query($name, $data));
     }
 
     public function handleMessage(MQTT\Message $message): void
@@ -135,15 +126,16 @@ class QueryBus implements QueryBusInterface
             }
 
             case 'query': {
-                $sourceId = $payload['src'] ?? null;
+                $srcId = $payload['src'] ?? null;
+                $dstId = $payload['dst'] ?? null;
                 $id = $payload['id'] ?? null;
                 $name = $payload['name'] ?? null;
                 $data = $payload['data'] ?? [];
 
-                $result = $this->handleQuery(new Query($name, $data, $id));
+                $result = $this->handleQuery($dstId, $name, $data);
 
                 $this->connection->publish(new MQTT\DefaultMessage(
-                    sprintf('query_bus/%s', $sourceId),
+                    sprintf('query_bus/%s', $srcId),
                     json_encode([
                         'src' => $this->busId,
                         'x' => 'result',
