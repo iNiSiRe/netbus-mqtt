@@ -12,6 +12,7 @@ use inisire\NetBus\Query\QueryHandlerInterface;
 use inisire\NetBus\Query\QueryInterface;
 use inisire\NetBus\Query\Result;
 use inisire\NetBus\Query\ResultInterface;
+use inisire\NetBus\Query\Route;
 use Psr\Log\LoggerInterface;
 
 
@@ -65,6 +66,13 @@ class QueryBus implements QueryBusInterface
         foreach ($handler->getSubscribedQueries() as $name => $handler) {
             $this->handlers[$name] = $handler;
         }
+    }
+
+    public function on(Route $route, callable $handler): void
+    {
+        $topic = sprintf('query_bus/%s/%s', $route->getBusId(), $route->getQueryName());
+        $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
+        $this->handlers[$route->getQueryName()] = $handler;
     }
 
     public function execute(string $destinationId, string $name, array $data = []): ResultInterface
