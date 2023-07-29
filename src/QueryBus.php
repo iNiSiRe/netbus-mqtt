@@ -3,20 +3,19 @@
 namespace inisire\mqtt\NetBus;
 
 use BinSoul\Net\Mqtt as MQTT;
-use inisire\fibers\Network\SocketFactory;
 use inisire\fibers\Promise;
 use inisire\mqtt\Connection;
 use inisire\NetBus\Query\Query;
-use inisire\NetBus\Query\QueryBusInterface;
 use inisire\NetBus\Query\QueryHandlerInterface;
-use inisire\NetBus\Query\QueryInterface;
 use inisire\NetBus\Query\Result;
 use inisire\NetBus\Query\ResultInterface;
-use inisire\NetBus\Query\Route;
+use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
+use function inisire\fibers\asleep;
 
 
-class QueryBus
+class QueryBus implements LoggerAwareInterface
 {
     private string $busId;
 
@@ -32,13 +31,13 @@ class QueryBus
      */
     private array $handlers = [];
 
-    public function __construct(
-        private readonly LoggerInterface $logger,
-        SocketFactory   $socketFactory,
-    )
+    private LoggerInterface $logger;
+
+    public function __construct()
     {
+        $this->logger = new NullLogger();
         $this->busId = uniqid();
-        $this->connection = new Connection($logger, $socketFactory);
+        $this->connection = new Connection();
     }
 
     public function connect(string $host): bool
@@ -54,6 +53,13 @@ class QueryBus
         }
 
         $this->connection->onMessage([$this, 'handleMessage']);
+        $this->connection->onDisconnect(function () use ($host) {
+            $this->logger->error('Disconnected');
+            while (!$this->connection->connect($host)) {
+                $this->logger->info('Can\'t connect. Trying to reconnect...');
+                asleep(5);
+            }
+        });
 
         return true;
     }
@@ -151,5 +157,11 @@ class QueryBus
                 $this->logger->error(sprintf('Bad message "%s"', $x));
             }
         }
+    }
+
+    public function setLogger(LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
+        $this->connection->setLogger($logger);
     }
 }

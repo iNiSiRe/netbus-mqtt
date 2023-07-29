@@ -11,10 +11,13 @@ use inisire\NetBus\Event\EventSubscriber;
 use inisire\NetBus\Event\RemoteEvent;
 use inisire\NetBus\Event\RemoteEventInterface;
 use inisire\NetBus\Event\SubscriptionInterface;
+use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
+use function inisire\fibers\asleep;
 
 
-class EventBus implements EventBusInterface
+class EventBus implements EventBusInterface, LoggerAwareInterface
 {
     private ?Connection $connection = null;
 
@@ -23,20 +26,27 @@ class EventBus implements EventBusInterface
      */
     private array $subscribers = [];
 
-    public function __construct(
-        private readonly LoggerInterface $logger,
-        private readonly SocketFactory   $socketFactory,
-    )
+    private LoggerInterface $logger;
+
+    public function __construct()
     {
+        $this->logger = new NullLogger();
     }
 
     public function connect(string $host): bool
     {
-        $this->connection = new Connection($this->logger, $this->socketFactory);
+        $this->connection = new Connection($this->logger);
 
         $connected = $this->connection->connect($host);
 
         $this->connection->onMessage([$this, 'handleMessage']);
+        $this->connection->onDisconnect(function () use ($host) {
+            $this->logger->error('Disconnected');
+            while (!$this->connection->connect($host)) {
+                $this->logger->info('Can\'t connect. Trying to reconnect...');
+                asleep(5);
+            }
+        });
 
         return $connected;
     }
@@ -118,5 +128,11 @@ class EventBus implements EventBusInterface
                 $this->logger->error(sprintf('Bad message "%s"', $x));
             }
         }
+    }
+
+    public function setLogger(LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
+        $this->connection->setLogger($logger);
     }
 }
