@@ -3,6 +3,7 @@
 namespace inisire\mqtt\NetBus;
 
 use BinSoul\Net\Mqtt as MQTT;
+use inisire\fibers\Network\Exception\ConnectionException;
 use inisire\fibers\Network\SocketFactory;
 use inisire\mqtt\Connection;
 use inisire\NetBus\Event\EventBusInterface;
@@ -15,10 +16,12 @@ use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use function inisire\fibers\asleep;
+use function inisire\fibers\async;
 
 
 class EventBus implements EventBusInterface, LoggerAwareInterface
 {
+    private ?string $host = null;
     private ?Connection $connection = null;
 
     /**
@@ -35,20 +38,40 @@ class EventBus implements EventBusInterface, LoggerAwareInterface
 
     public function connect(string $host): bool
     {
-        $this->connection = new Connection($this->logger);
+        $this->connection = new Connection();
+        $this->connection->setLogger($this->logger);
 
-        $connected = $this->connection->connect($host);
-
+        $this->connection->onConnected([$this, 'onConnected']);
         $this->connection->onMessage([$this, 'handleMessage']);
-        $this->connection->onDisconnect(function () use ($host) {
-            $this->logger->error('Disconnected');
-            while (!$this->connection->connect($host)) {
-                $this->logger->info('Can\'t connect. Trying to reconnect...');
-                asleep(5);
-            }
-        });
 
-        return $connected;
+        do {
+            $this->logger->info('Trying to connect');
+            $this->host = $host;
+            $this->connection->connect($host);
+        } while (!$this->connection->isConnected());
+
+        $this->connection->onDisconnect([$this, 'onDisconnect']);
+
+        return $this->connection->isConnected();
+    }
+
+    public function onConnected(): void
+    {
+        foreach ($this->subscribers as $subscriber) {
+            $this->sendSubscribe($subscriber);
+        }
+    }
+
+    public function onDisconnect(): void
+    {
+        $this->logger->error('Disconnected');
+
+        async(function () {
+            do {
+                asleep(5.0);
+                $this->connect($this->host);
+            } while (!$this->connection->isConnected());
+        });
     }
 
     public function createSource(string $source): EventSource
@@ -77,7 +100,7 @@ class EventBus implements EventBusInterface, LoggerAwareInterface
         $this->connection->publish(new MQTT\DefaultMessage($topic, $payload));
     }
 
-    public function subscribe(SubscriptionInterface $subscription): void
+    private function sendSubscribe(SubscriptionInterface $subscription): void
     {
         foreach ($subscription->getSubscribedSources()->getEntries() as $source) {
             $source = str_replace('*', '+', $source);
@@ -87,7 +110,11 @@ class EventBus implements EventBusInterface, LoggerAwareInterface
                 $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
             }
         }
+    }
 
+    public function subscribe(SubscriptionInterface $subscription): void
+    {
+        $this->sendSubscribe($subscription);
         $this->subscribers[] = $subscription;
     }
 
@@ -133,6 +160,6 @@ class EventBus implements EventBusInterface, LoggerAwareInterface
     public function setLogger(LoggerInterface $logger): void
     {
         $this->logger = $logger;
-        $this->connection->setLogger($logger);
+        $this->connection?->setLogger($logger);
     }
 }

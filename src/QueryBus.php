@@ -3,6 +3,7 @@
 namespace inisire\mqtt\NetBus;
 
 use BinSoul\Net\Mqtt as MQTT;
+use inisire\fibers\Network\Exception\ConnectionException;
 use inisire\fibers\Promise;
 use inisire\mqtt\Connection;
 use inisire\NetBus\Query\Query;
@@ -13,13 +14,15 @@ use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use function inisire\fibers\asleep;
+use function inisire\fibers\async;
 
 
 class QueryBus implements LoggerAwareInterface
 {
     private string $busId;
 
-    private Connection $connection;
+    private ?string $host = null;
+    private ?Connection $connection = null;
 
     /**
      * @var array<string,Promise>
@@ -42,32 +45,57 @@ class QueryBus implements LoggerAwareInterface
 
     public function connect(string $host): bool
     {
-        if (!$this->connection->connect($host)) {
-            $this->logger->error('Connection error');
-            return false;
-        }
+        $this->connection = new Connection();
+        $this->connection->setLogger($this->logger);
+
+        $this->connection->onConnected([$this, 'onConnected']);
+        $this->connection->onMessage([$this, 'handleMessage']);
+
+        do {
+            $this->logger->info('Trying to connect');
+            $this->host = $host;
+            $this->connection->connect($host);
+        } while (!$this->connection->isConnected());
 
         if (!$this->connection->subscribe(new MQTT\DefaultSubscription(sprintf('query_bus/%s', $this->busId)))) {
             $this->logger->error('Result subscription error');
+            $this->connection->close();
             return false;
         }
 
-        $this->connection->onMessage([$this, 'handleMessage']);
-        $this->connection->onDisconnect(function () use ($host) {
-            $this->logger->error('Disconnected');
-            while (!$this->connection->connect($host)) {
-                $this->logger->info('Can\'t connect. Trying to reconnect...');
-                asleep(5);
-            }
-        });
+        $this->connection->onDisconnect([$this, 'onDisconnect']);
 
-        return true;
+        return $this->connection->isConnected();
+    }
+
+    public function onConnected(): void
+    {
+        foreach ($this->handlers as $busId => $handler) {
+            $this->sendSubscribe($busId);
+        }
+    }
+
+    public function onDisconnect(): void
+    {
+        $this->logger->error('Disconnected');
+
+        async(function () {
+            do {
+                asleep(5.0);
+                $this->connect($this->host);
+            } while (!$this->connection->isConnected());
+        });
+    }
+
+    private function sendSubscribe(string $busId): void
+    {
+        $topic = sprintf('query_bus/%s', $busId);
+        $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
     }
 
     public function on(string $busId, callable $handler): void
     {
-        $topic = sprintf('query_bus/%s', $busId);
-        $this->connection->subscribe(new MQTT\DefaultSubscription($topic));
+        $this->sendSubscribe($busId);
         $this->handlers[$busId] = $handler;
     }
 
@@ -162,6 +190,6 @@ class QueryBus implements LoggerAwareInterface
     public function setLogger(LoggerInterface $logger): void
     {
         $this->logger = $logger;
-        $this->connection->setLogger($logger);
+        $this->connection?->setLogger($logger);
     }
 }
